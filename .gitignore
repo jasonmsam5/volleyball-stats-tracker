@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+/client/node_modules/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Environment variables
+.env
+/client/.env
+
+# Build files
+/build
+/client/build
+
+# Logs
+*.log
+npm-debug.log*
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db 
