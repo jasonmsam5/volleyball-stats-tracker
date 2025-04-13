@@ -147,18 +147,37 @@ function App() {
   const handleAddPass = async (playerId, rating) => {
     try {
       if (!sessionId) {
-        console.log('No session ID, creating new session...'); // Debug log
+        console.log('No session ID, creating new session...');
         await createNewSession();
       }
-      console.log('Adding pass with session:', sessionId, 'player:', playerId, 'rating:', rating); // Debug log
+      console.log('Adding pass with session:', sessionId, 'player:', playerId, 'rating:', rating);
       
-      await axios.post(`${API_URL}/pass_stats`, {
+      const response = await axios.post(`${API_URL}/pass_stats`, {
         session_id: sessionId,
         player_id: playerId,
         rating
       });
       
-      await fetchSessionStats();
+      // Update stats immediately using the response
+      if (response.data) {
+        setStats(prevStats => {
+          const currentStats = prevStats[playerId] || { total_passes: 0, average_rating: 0 };
+          const newTotalPasses = currentStats.total_passes + 1;
+          const newAverageRating = ((currentStats.average_rating * currentStats.total_passes) + rating) / newTotalPasses;
+          
+          return {
+            ...prevStats,
+            [playerId]: {
+              ...currentStats,
+              total_passes: newTotalPasses,
+              average_rating: newAverageRating
+            }
+          };
+        });
+      }
+      
+      // Still fetch updated stats in the background to ensure accuracy
+      fetchSessionStats();
     } catch (error) {
       console.error('Error adding pass:', error.response || error);
     }
