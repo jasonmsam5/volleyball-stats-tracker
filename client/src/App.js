@@ -161,25 +161,37 @@ function App() {
       // Update stats immediately using the response
       if (response.data) {
         setStats(prevStats => {
-          const currentStats = prevStats[playerId] || { total_passes: 0, average_rating: 0 };
-          const newTotalPasses = currentStats.total_passes + 1;
-          const newAverageRating = ((currentStats.average_rating * currentStats.total_passes) + rating) / newTotalPasses;
-          
-          return {
-            ...prevStats,
-            [playerId]: {
-              ...currentStats,
-              total_passes: newTotalPasses,
-              average_rating: newAverageRating
-            }
-          };
+          try {
+            const currentStats = prevStats[playerId] || { total_passes: 0, average_rating: 0 };
+            const newTotalPasses = (currentStats.total_passes || 0) + 1;
+            const newAverageRating = ((currentStats.average_rating || 0) * (currentStats.total_passes || 0) + rating) / newTotalPasses;
+            
+            return {
+              ...prevStats,
+              [playerId]: {
+                ...currentStats,
+                total_passes: newTotalPasses,
+                average_rating: newAverageRating
+              }
+            };
+          } catch (error) {
+            console.error('Error updating stats:', error);
+            return prevStats; // Return previous stats if update fails
+          }
         });
       }
       
-      // Still fetch updated stats in the background to ensure accuracy
-      fetchSessionStats();
+      // Fetch updated stats in the background
+      try {
+        await fetchSessionStats();
+      } catch (error) {
+        console.error('Error fetching updated stats:', error);
+        // Don't throw the error, just log it
+      }
     } catch (error) {
       console.error('Error adding pass:', error.response || error);
+      // Show error to user without crashing
+      alert('Failed to add pass. Please try again.');
     }
   };
 
