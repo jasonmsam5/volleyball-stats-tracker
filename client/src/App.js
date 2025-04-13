@@ -279,11 +279,20 @@ function App() {
   const PlayerCard = ({ player, onClose, onMoveLeft, onMoveRight }) => {
     const playerStats = stats[player.id] || { total_passes: 0, average_rating: 0 };
     const [lastClicked, setLastClicked] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
 
     const handlePassClick = async (rating) => {
-      setLastClicked(rating);
-      await handleAddPass(player.id, rating);
-      setTimeout(() => setLastClicked(null), 300); // Reset after animation
+      try {
+        setIsLoading(true);
+        setLastClicked(rating);
+        await handleAddPass(player.id, rating);
+      } catch (error) {
+        console.error('Error in handlePassClick:', error);
+        // Don't show alert here as handleAddPass already shows it
+      } finally {
+        setIsLoading(false);
+        setTimeout(() => setLastClicked(null), 300);
+      }
     };
 
     return (
@@ -314,6 +323,9 @@ function App() {
               '&.active': {
                 transform: 'scale(1.2)',
                 boxShadow: 6
+              },
+              '&:disabled': {
+                opacity: 0.7
               }
             }
           }}
@@ -323,6 +335,7 @@ function App() {
               key={rating}
               variant="contained"
               className={lastClicked === rating ? 'active' : ''}
+              disabled={isLoading}
               sx={{
                 bgcolor: rating === 0 ? 'error.main' :
                         rating === 1 ? 'warning.main' :
@@ -346,6 +359,7 @@ function App() {
             <IconButton 
               onClick={onMoveLeft} 
               size="small"
+              disabled={isLoading}
               sx={{
                 bgcolor: 'grey.100',
                 '&:hover': {
@@ -359,6 +373,7 @@ function App() {
             <IconButton 
               onClick={onMoveRight} 
               size="small"
+              disabled={isLoading}
               sx={{
                 bgcolor: 'grey.100',
                 '&:hover': {
