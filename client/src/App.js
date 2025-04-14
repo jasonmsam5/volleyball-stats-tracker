@@ -147,10 +147,10 @@ function App() {
   const handleAddPass = async (playerId, rating) => {
     try {
       if (!sessionId) {
-        console.log('No session ID, creating new session...');
+        console.log('No session ID, creating new session...'); // Debug log
         await createNewSession();
       }
-      console.log('Adding pass with session:', sessionId, 'player:', playerId, 'rating:', rating);
+      console.log('Adding pass with session:', sessionId, 'player:', playerId, 'rating:', rating); // Debug log
       
       const response = await axios.post(`${API_URL}/pass_stats`, {
         session_id: sessionId,
@@ -158,40 +158,15 @@ function App() {
         rating
       });
       
-      // Update stats immediately using the response
-      if (response.data) {
-        setStats(prevStats => {
-          try {
-            const currentStats = prevStats[playerId] || { total_passes: 0, average_rating: 0 };
-            const newTotalPasses = (currentStats.total_passes || 0) + 1;
-            const newAverageRating = ((currentStats.average_rating || 0) * (currentStats.total_passes || 0) + rating) / newTotalPasses;
-            
-            return {
-              ...prevStats,
-              [playerId]: {
-                ...currentStats,
-                total_passes: newTotalPasses,
-                average_rating: newAverageRating
-              }
-            };
-          } catch (error) {
-            console.error('Error updating stats:', error);
-            return prevStats; // Return previous stats if update fails
-          }
-        });
-      }
-      
-      // Fetch updated stats in the background
-      try {
-        await fetchSessionStats();
-      } catch (error) {
-        console.error('Error fetching updated stats:', error);
-        // Don't throw the error, just log it
+      // Update stats directly with the response data
+      if (response.data.stats) {
+        setStats(prevStats => ({
+          ...prevStats,
+          [playerId]: response.data.stats
+        }));
       }
     } catch (error) {
       console.error('Error adding pass:', error.response || error);
-      // Show error to user without crashing
-      alert('Failed to add pass. Please try again.');
     }
   };
 
@@ -279,20 +254,11 @@ function App() {
   const PlayerCard = ({ player, onClose, onMoveLeft, onMoveRight }) => {
     const playerStats = stats[player.id] || { total_passes: 0, average_rating: 0 };
     const [lastClicked, setLastClicked] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
 
     const handlePassClick = async (rating) => {
-      try {
-        setIsLoading(true);
-        setLastClicked(rating);
-        await handleAddPass(player.id, rating);
-      } catch (error) {
-        console.error('Error in handlePassClick:', error);
-        // Don't show alert here as handleAddPass already shows it
-      } finally {
-        setIsLoading(false);
-        setTimeout(() => setLastClicked(null), 300);
-      }
+      setLastClicked(rating);
+      await handleAddPass(player.id, rating);
+      setTimeout(() => setLastClicked(null), 300); // Reset after animation
     };
 
     return (
@@ -323,9 +289,6 @@ function App() {
               '&.active': {
                 transform: 'scale(1.2)',
                 boxShadow: 6
-              },
-              '&:disabled': {
-                opacity: 0.7
               }
             }
           }}
@@ -335,7 +298,6 @@ function App() {
               key={rating}
               variant="contained"
               className={lastClicked === rating ? 'active' : ''}
-              disabled={isLoading}
               sx={{
                 bgcolor: rating === 0 ? 'error.main' :
                         rating === 1 ? 'warning.main' :
@@ -359,7 +321,6 @@ function App() {
             <IconButton 
               onClick={onMoveLeft} 
               size="small"
-              disabled={isLoading}
               sx={{
                 bgcolor: 'grey.100',
                 '&:hover': {
@@ -373,7 +334,6 @@ function App() {
             <IconButton 
               onClick={onMoveRight} 
               size="small"
-              disabled={isLoading}
               sx={{
                 bgcolor: 'grey.100',
                 '&:hover': {

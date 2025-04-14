@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-const { Pool } = require('pg');
+const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 
 const app = express();
@@ -24,174 +24,214 @@ app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'client/build')));
 
 // Database setup
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/volleyball',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+const db = new sqlite3.Database('volleyball.db', (err) => {
+  if (err) {
+    console.error('Error opening database:', err);
+  } else {
+    console.log('Connected to SQLite database');
+    initializeDatabase();
+  }
 });
 
-// Initialize database tables
-async function initializeDatabase() {
-  const client = await pool.connect();
-  try {
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS players (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        jersey_number INTEGER NOT NULL
-      )
-    `);
+function initializeDatabase() {
+  db.serialize(() => {
+    // Players table
+    db.run(`CREATE TABLE IF NOT EXISTS players (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      jersey_number INTEGER NOT NULL
+    )`);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    // Sessions table
+    db.run(`CREATE TABLE IF NOT EXISTS sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      date DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
 
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS pass_stats (
-        id SERIAL PRIMARY KEY,
-        session_id INTEGER REFERENCES sessions(id),
-        player_id INTEGER REFERENCES players(id),
-        rating INTEGER CHECK (rating BETWEEN 0 AND 3),
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    console.log('Database tables initialized successfully');
-  } catch (err) {
-    console.error('Error initializing database:', err);
-  } finally {
-    client.release();
-  }
+    // Pass stats table
+    db.run(`CREATE TABLE IF NOT EXISTS pass_stats (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER,
+      player_id INTEGER,
+      rating INTEGER CHECK (rating BETWEEN 0 AND 3),
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES sessions(id),
+      FOREIGN KEY (player_id) REFERENCES players(id)
+    )`);
+  });
 }
-
-// Initialize database on startup
-initializeDatabase();
 
 // API Routes
 // Players
-app.get('/api/players', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM players');
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching players:', err);
-    res.status(500).json({ error: err.message });
-  }
+app.get('/api/players', (req, res) => {
+  console.log('GET /api/players - Fetching all players');
+  db.all('SELECT * FROM players', [], (err, rows) => {
+    if (err) {
+      console.error('Error fetching players:', err);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    console.log('Successfully fetched players:', rows);
+    res.json(rows);
+  });
 });
 
-app.post('/api/players', async (req, res) => {
+app.post('/api/players', (req, res) => {
   const { name, jersey_number } = req.body;
-  
+  console.log('POST /api/players - Adding new player:', { name, jersey_number });
+
   if (!name || !jersey_number) {
+    console.error('Invalid player data:', req.body);
     res.status(400).json({ error: 'Name and jersey number are required' });
     return;
   }
 
-  try {
-    const result = await pool.query(
-      'INSERT INTO players (name, jersey_number) VALUES ($1, $2) RETURNING *',
-      [name, jersey_number]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Error adding player:', err);
-    res.status(500).json({ error: err.message });
-  }
+  db.run('INSERT INTO players (name, jersey_number) VALUES (?, ?)',
+    [name, jersey_number],
+    function(err) {
+      if (err) {
+        console.error('Error adding player:', err);
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      const newPlayer = { id: this.lastID, name, jersey_number };
+      console.log('Successfully added player:', newPlayer);
+      res.json(newPlayer);
+    });
 });
 
-app.put('/api/players/:id', async (req, res) => {
+app.put('/api/players/:id', (req, res) => {
   const { name, jersey_number } = req.body;
-  try {
-    const result = await pool.query(
-      'UPDATE players SET name = $1, jersey_number = $2 WHERE id = $3 RETURNING *',
-      [name, jersey_number, req.params.id]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  db.run('UPDATE players SET name = ?, jersey_number = ? WHERE id = ?',
+    [name, jersey_number, req.params.id],
+    function(err) {
+      if (err) {
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      res.json({ id: req.params.id, name, jersey_number });
+    });
 });
 
-app.delete('/api/players/:id', async (req, res) => {
-  try {
-    await pool.query('DELETE FROM players WHERE id = $1', [req.params.id]);
+app.delete('/api/players/:id', (req, res) => {
+  db.run('DELETE FROM players WHERE id = ?', [req.params.id], (err) => {
+    if (err) {
+      res.status(500).json({ error: err.message });
+      return;
+    }
     res.json({ message: 'Player deleted successfully' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  });
 });
 
 // Sessions
-app.post('/api/sessions', async (req, res) => {
+app.post('/api/sessions', (req, res) => {
   const { name } = req.body;
-  
+  console.log('Creating new session with name:', name);
+
   if (!name) {
+    console.error('Session name is required');
     res.status(400).json({ error: 'Session name is required' });
     return;
   }
 
-  try {
-    const result = await pool.query(
-      'INSERT INTO sessions (name) VALUES ($1) RETURNING *',
-      [name]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Error creating session:', err);
-    res.status(500).json({ error: err.message });
-  }
+  db.run('INSERT INTO sessions (name) VALUES (?)',
+    [name],
+    function(err) {
+      if (err) {
+        console.error('Error creating session:', err);
+        res.status(500).json({ error: err.message });
+        return;
+      }
+      const newSession = { id: this.lastID, name };
+      console.log('Successfully created session:', newSession);
+      res.json(newSession);
+    });
 });
 
 // Pass Stats
-app.post('/api/pass_stats', async (req, res) => {
+app.post('/api/pass_stats', (req, res) => {
   const { session_id, player_id, rating } = req.body;
-  
+  console.log('Adding pass stat:', { session_id, player_id, rating });
+
   if (!session_id || !player_id || rating === undefined) {
+    console.error('Invalid pass stat data:', req.body);
     res.status(400).json({ error: 'Session ID, player ID, and rating are required' });
     return;
   }
 
-  try {
-    const result = await pool.query(
-      'INSERT INTO pass_stats (session_id, player_id, rating) VALUES ($1, $2, $3) RETURNING *',
-      [session_id, player_id, rating]
-    );
-    res.json(result.rows[0]);
-  } catch (err) {
-    console.error('Error adding pass stat:', err);
-    res.status(500).json({ error: err.message });
-  }
+  db.run('INSERT INTO pass_stats (session_id, player_id, rating) VALUES (?, ?, ?)',
+    [session_id, player_id, rating],
+    function(err) {
+      if (err) {
+        console.error('Error adding pass stat:', err);
+        res.status(500).json({ error: err.message });
+        return;
+      }
+
+      // Get updated stats for this player
+      db.get(`
+        SELECT 
+          p.id as player_id,
+          p.name,
+          p.jersey_number,
+          COUNT(ps.id) as total_passes,
+          AVG(ps.rating) as average_rating
+        FROM players p
+        LEFT JOIN pass_stats ps ON p.id = ps.player_id AND ps.session_id = ?
+        WHERE p.id = ?
+        GROUP BY p.id
+      `, [session_id, player_id], (err, updatedStats) => {
+        if (err) {
+          console.error('Error fetching updated stats:', err);
+          res.status(500).json({ error: err.message });
+          return;
+        }
+
+        console.log('Successfully added pass and fetched updated stats:', updatedStats);
+        res.json({
+          message: 'Pass added successfully',
+          stats: updatedStats || {
+            player_id: player_id,
+            total_passes: 1,
+            average_rating: rating
+          }
+        });
+      });
+    });
 });
 
-app.get('/api/session/:id/stats', async (req, res) => {
+app.get('/api/session/:id/stats', (req, res) => {
   const sessionId = req.params.id;
-  
+  console.log('Fetching stats for session:', sessionId);
+
   if (!sessionId || sessionId === 'null') {
+    console.error('Invalid session ID:', sessionId);
     res.status(400).json({ error: 'Valid session ID is required' });
     return;
   }
 
-  try {
-    const result = await pool.query(`
-      SELECT 
-        p.id as player_id,
-        p.name,
-        p.jersey_number,
-        COUNT(ps.id) as total_passes,
-        AVG(ps.rating) as average_rating
-      FROM players p
-      LEFT JOIN pass_stats ps ON p.id = ps.player_id AND ps.session_id = $1
-      GROUP BY p.id
-    `, [sessionId]);
-    
-    res.json(result.rows);
-  } catch (err) {
-    console.error('Error fetching session stats:', err);
-    res.status(500).json({ error: err.message });
-  }
+  const query = `
+    SELECT 
+      p.id as player_id,
+      p.name,
+      p.jersey_number,
+      COUNT(ps.id) as total_passes,
+      AVG(ps.rating) as average_rating
+    FROM players p
+    LEFT JOIN pass_stats ps ON p.id = ps.player_id AND ps.session_id = ?
+    GROUP BY p.id
+  `;
+  
+  db.all(query, [sessionId], (err, rows) => {
+    if (err) {
+      console.error('Error fetching session stats:', err);
+      res.status(500).json({ error: err.message });
+      return;
+    }
+    console.log('Successfully fetched session stats:', rows);
+    res.json(rows);
+  });
 });
 
 // Undo last pass
@@ -206,29 +246,27 @@ app.delete('/api/session/:sessionId/player/:playerId/last_pass', (req, res) => {
   }
 
   // First, get the last pass ID for this player in this session
-  pool.query(
-    'SELECT id FROM pass_stats WHERE session_id = $1 AND player_id = $2 ORDER BY timestamp DESC LIMIT 1',
+  db.get(
+    'SELECT id FROM pass_stats WHERE session_id = ? AND player_id = ? ORDER BY timestamp DESC LIMIT 1',
     [sessionId, playerId],
-    (err, result) => {
+    (err, row) => {
       if (err) {
         console.error('Error finding last pass:', err);
         res.status(500).json({ error: err.message });
         return;
       }
 
-      if (result.rows.length === 0) {
+      if (!row) {
         console.log('No passes found to undo');
         res.status(404).json({ error: 'No passes found to undo' });
         return;
       }
 
-      const lastPassId = result.rows[0].id;
-
       // Delete the last pass
-      pool.query(
-        'DELETE FROM pass_stats WHERE id = $1',
-        [lastPassId],
-        (err) => {
+      db.run(
+        'DELETE FROM pass_stats WHERE id = ?',
+        [row.id],
+        function(err) {
           if (err) {
             console.error('Error deleting pass:', err);
             res.status(500).json({ error: err.message });
@@ -236,8 +274,7 @@ app.delete('/api/session/:sessionId/player/:playerId/last_pass', (req, res) => {
           }
 
           // Get updated stats for this player
-          pool.query(
-            `
+          db.get(`
             SELECT 
               p.id as player_id,
               p.name,
@@ -245,29 +282,26 @@ app.delete('/api/session/:sessionId/player/:playerId/last_pass', (req, res) => {
               COUNT(ps.id) as total_passes,
               AVG(ps.rating) as average_rating
             FROM players p
-            LEFT JOIN pass_stats ps ON p.id = ps.player_id AND ps.session_id = $1
-            WHERE p.id = $2
+            LEFT JOIN pass_stats ps ON p.id = ps.player_id AND ps.session_id = ?
+            WHERE p.id = ?
             GROUP BY p.id
-            `,
-            [sessionId, playerId],
-            (err, result) => {
-              if (err) {
-                console.error('Error fetching updated stats:', err);
-                res.status(500).json({ error: err.message });
-                return;
-              }
-
-              console.log('Successfully deleted last pass and fetched updated stats:', result.rows);
-              res.json({
-                message: 'Last pass deleted successfully',
-                stats: result.rows[0] || {
-                  player_id: playerId,
-                  total_passes: 0,
-                  average_rating: 0
-                }
-              });
+          `, [sessionId, playerId], (err, updatedStats) => {
+            if (err) {
+              console.error('Error fetching updated stats:', err);
+              res.status(500).json({ error: err.message });
+              return;
             }
-          );
+
+            console.log('Successfully deleted last pass and fetched updated stats:', updatedStats);
+            res.json({
+              message: 'Last pass deleted successfully',
+              stats: updatedStats || {
+                player_id: playerId,
+                total_passes: 0,
+                average_rating: 0
+              }
+            });
+          });
         }
       );
     }
